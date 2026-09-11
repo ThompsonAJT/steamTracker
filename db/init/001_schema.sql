@@ -1,19 +1,19 @@
 -- =====================================================================
 -- Steam tracker — initial schema
 --
--- Design notes (these are the things worth defending in your write-up):
+-- Notes to self on why this is shaped the way it is:
 --
---  1. price_events is an EVENT LOG, not a daily snapshot. We only insert
---     a row when the price actually CHANGES. A daily snapshot of 100k
---     apps = 36.5M rows/year of mostly duplicate data. Event log for the
---     same period is maybe 1-2M rows. This is the correct model and it's
---     a real design decision you made.
+--  1. price_events is an EVENT LOG, not a daily snapshot. Only insert a
+--     row when the price actually CHANGES. A daily snapshot of 100k apps
+--     would be ~36.5M rows/year of mostly duplicate data — an event log
+--     for the same period is more like 1-2M rows. This is the design
+--     decision I want to call out in the README.
 --
 --  2. player_counts IS a snapshot, because the value genuinely changes
---     every single poll. That's what makes it a time series, and that's
---     why it becomes a TimescaleDB hypertable.
+--     every single poll. That's what makes it a real time series, and
+--     why it's a TimescaleDB hypertable.
 --
---  3. Money is stored in INTEGER CENTS. Never use FLOAT for money.
+--  3. Money is stored in INTEGER CENTS. Never float for money.
 --
 --  4. Timestamps are TIMESTAMPTZ (timezone-aware), always stored in UTC.
 -- =====================================================================
@@ -22,7 +22,7 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 
 
 -- ---------------------------------------------------------------------
--- apps — one row per Steam application. This is your master list.
+-- apps — one row per Steam application. This is the master list.
 -- ---------------------------------------------------------------------
 CREATE TABLE apps (
     appid           INTEGER PRIMARY KEY,          -- Steam's own ID; no surrogate key needed
@@ -32,7 +32,7 @@ CREATE TABLE apps (
     release_date    DATE,                         -- NULL for unreleased/TBA
     coming_soon     BOOLEAN     NOT NULL DEFAULT FALSE,
 
-    -- Ingestion bookkeeping. These drive your adaptive-polling research.
+    -- Ingestion bookkeeping — lets me prioritize which apps to poll next.
     first_seen_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_polled_at  TIMESTAMPTZ,                  -- when did we last hit the API for this app
     poll_priority   SMALLINT    NOT NULL DEFAULT 5,  -- 1 = poll often, 10 = rarely
@@ -121,11 +121,11 @@ CREATE INDEX idx_app_tags_tag ON app_tags (tag_id);
 
 
 -- ---------------------------------------------------------------------
--- poll_log — every API call you make. Do NOT skip this table.
+-- poll_log — every API call. Don't skip this table.
 --
--- This is your research instrument. Without it you cannot report request
--- volume, error/rate-limit rates, or change-detection latency, and those
--- numbers ARE the evaluation section of your paper.
+-- This is what lets me actually debug rate limits later, and gives me
+-- real numbers for request volume, error rate, and change-detection
+-- latency to put in the README.
 -- ---------------------------------------------------------------------
 CREATE TABLE poll_log (
     id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

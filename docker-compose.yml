@@ -8,14 +8,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
       POSTGRES_DB: ${POSTGRES_DB:-steamtracker}
     ports:
-      # host:container — 5433 on the host avoids clashing with any
-      # Postgres you may already have installed locally.
+      # host:container — using 5433 on the host so it doesn't clash with
+      # any Postgres I already have installed locally.
       - "5433:5432"
     volumes:
-      # Named volume = your data survives `docker compose down`.
+      # Named volume so the data survives `docker compose down`.
       - steam_pgdata:/var/lib/postgresql/data
-      # Anything in this folder runs ONCE, on first startup of an empty
-      # volume. Good for creating the extension + initial tables.
+      # Anything in here runs ONCE, on first startup of an empty volume —
+      # this is where the extension + initial tables get created.
       - ./db/init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-steam} -d ${POSTGRES_DB:-steamtracker}"]
