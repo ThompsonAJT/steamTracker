@@ -31,69 +31,73 @@ def index():
 @app.get("/api/apps")
 def list_apps(q: str = "", limit: int = 50):
     """Search apps, with their most recent price attached."""
-    rows = ENGINE.connect().execute(
-        text("""
-            SELECT a.appid, a.name, a.app_type, a.is_free,
-                   p.final_cents, p.initial_cents, p.discount_percent
-            FROM apps a
-            LEFT JOIN LATERAL (
-                SELECT final_cents, initial_cents, discount_percent
-                FROM price_events
-                WHERE appid = a.appid
-                ORDER BY observed_at DESC
-                LIMIT 1
-            ) p ON TRUE
-            WHERE (:q = '' OR LOWER(a.name) LIKE '%' || LOWER(:q) || '%')
-            ORDER BY a.name
-            LIMIT :limit
-        """),
-        {"q": q, "limit": limit},
-    ).mappings().all()
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT a.appid, a.name, a.app_type, a.is_free,
+                       p.final_cents, p.initial_cents, p.discount_percent
+                FROM apps a
+                LEFT JOIN LATERAL (
+                    SELECT final_cents, initial_cents, discount_percent
+                    FROM price_events
+                    WHERE appid = a.appid
+                    ORDER BY observed_at DESC
+                    LIMIT 1
+                ) p ON TRUE
+                WHERE (:q = '' OR LOWER(a.name) LIKE '%' || LOWER(:q) || '%')
+                ORDER BY a.name
+                LIMIT :limit
+            """),
+            {"q": q, "limit": limit},
+        ).mappings().all()
     return [dict(r) for r in rows]
 
 
 @app.get("/api/apps/{appid}/prices")
 def price_history(appid: int):
-    rows = ENGINE.connect().execute(
-        text("""
-            SELECT observed_at, initial_cents, final_cents, discount_percent
-            FROM price_events
-            WHERE appid = :appid
-            ORDER BY observed_at
-        """),
-        {"appid": appid},
-    ).mappings().all()
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT observed_at, initial_cents, final_cents, discount_percent
+                FROM price_events
+                WHERE appid = :appid
+                ORDER BY observed_at
+            """),
+            {"appid": appid},
+        ).mappings().all()
     return [dict(r) for r in rows]
 
 
 @app.get("/api/apps/{appid}/players")
 def player_history(appid: int, hours: int = 168):
-    rows = ENGINE.connect().execute(
-        text("""
-            SELECT observed_at, player_count
-            FROM player_counts
-            WHERE appid = :appid
-              AND observed_at > NOW() - (:hours || ' hours')::INTERVAL
-            ORDER BY observed_at
-        """),
-        {"appid": appid, "hours": hours},
-    ).mappings().all()
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT observed_at, player_count
+                FROM player_counts
+                WHERE appid = :appid
+                  AND observed_at > NOW() - (:hours || ' hours')::INTERVAL
+                ORDER BY observed_at
+            """),
+            {"appid": appid, "hours": hours},
+        ).mappings().all()
     return [dict(r) for r in rows]
 
 
 @app.get("/api/deals")
 def current_deals(limit: int = 25):
     """Apps whose latest price event carries a discount."""
-    rows = ENGINE.connect().execute(
-        text("""
-            SELECT DISTINCT ON (a.appid)
-                   a.appid, a.name, p.final_cents, p.initial_cents,
-                   p.discount_percent, p.observed_at
-            FROM apps a
-            JOIN price_events p ON p.appid = a.appid
-            ORDER BY a.appid, p.observed_at DESC
-        """)
-    ).mappings().all()
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT DISTINCT ON (a.appid)
+                       a.appid, a.name, p.final_cents, p.initial_cents,
+                       p.discount_percent, p.observed_at
+                FROM apps a
+                JOIN price_events p ON p.appid = a.appid
+                ORDER BY a.appid, p.observed_at DESC
+            """)
+        ).mappings().all()
     deals = [dict(r) for r in rows if r["discount_percent"] > 0]
     deals.sort(key=lambda d: d["discount_percent"], reverse=True)
     return deals[:limit]
