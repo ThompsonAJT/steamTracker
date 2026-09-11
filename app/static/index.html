@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Steam Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171d25; --panel-2: #1e252e;
+    --line: #2a333d; --text: #c7d5e0; --dim: #7a8b99;
+    --accent: #66c0f4; --green: #a4d007;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 20px 24px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+  }
+  h1 { margin: 0; font-size: 20px; font-weight: 600; }
+  .stats { color: var(--dim); font-size: 13px; }
+  .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 0; min-height: calc(100vh - 70px); }
+  @media (max-width: 800px) { .wrap { grid-template-columns: 1fr; } }
+  aside { border-right: 1px solid var(--line); padding: 16px; }
+  main { padding: 24px; min-width: 0; }
+  input[type=search] {
+    width: 100%; padding: 9px 12px; border-radius: 4px;
+    border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--text); font-size: 14px; margin-bottom: 12px;
+  }
+  .row {
+    padding: 9px 10px; border-radius: 4px; cursor: pointer;
+    display: flex; justify-content: space-between; gap: 10px; font-size: 14px;
+  }
+  .row:hover { background: var(--panel-2); }
+  .row.active { background: var(--panel-2); color: #fff; }
+  .row .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .price { color: var(--dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .disc { color: var(--green); font-weight: 600; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 6px; padding: 18px; margin-bottom: 20px;
+  }
+  .card h2 { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: var(--dim); }
+  .empty { color: var(--dim); padding: 40px 0; text-align: center; }
+  canvas { max-height: 260px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Steam Tracker</h1>
+  <span class="stats" id="stats">loading…</span>
+</header>
+
+<div class="wrap">
+  <aside>
+    <input type="search" id="search" placeholder="Search games…" autocomplete="off">
+    <div id="list"></div>
+  </aside>
+
+  <main>
+    <div id="detail" class="empty">Select a game from the list.</div>
+  </main>
+</div>
+
+<script>
+const fmt = c => c == null ? "—" : "$" + (c / 100).toFixed(2);
+let priceChart = null, playerChart = null, activeId = null;
+
+async function loadStats() {
+  const s = await (await fetch("/api/stats")).json();
+  document.getElementById("stats").textContent =
+    `${s.apps} apps · ${s.price_events} price events · ` +
+    `${s.player_samples} player samples · ${s.error_rate}% errors`;
+}
+
+async function loadList(q = "") {
+  const apps = await (await fetch(`/api/apps?q=${encodeURIComponent(q)}`)).json();
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  for (const a of apps) {
+    const el = document.createElement("div");
+    el.className = "row" + (a.appid === activeId ? " active" : "");
+    const price = a.is_free ? "Free"
+      : a.discount_percent > 0
+        ? `<span class="disc">-${a.discount_percent}%</span> ${fmt(a.final_cents)}`
+        : fmt(a.final_cents);
+    el.innerHTML = `<span class="nm">${a.name}</span><span class="price">${price}</span>`;
+    el.onclick = () => select(a);
+    list.appendChild(el);
+  }
+}
+
+async function select(app) {
+  activeId = app.appid;
+  document.querySelectorAll(".row").forEach(r => r.classList.remove("active"));
+  event?.currentTarget?.classList.add("active");
+
+  document.getElementById("detail").innerHTML = `
+    <div class="card">
+      <h2>${app.name} — price history</h2>
+      <canvas id="priceChart"></canvas>
+    </div>
+    <div class="card">
+      <h2>Concurrent players (last 7 days)</h2>
+      <canvas id="playerChart"></canvas>
+    </div>`;
+
+  const [prices, players] = await Promise.all([
+    fetch(`/api/apps/${app.appid}/prices`).then(r => r.json()),
+    fetch(`/api/apps/${app.appid}/players`).then(r => r.json()),
+  ]);
+
+  priceChart?.destroy();
+  priceChart = new Chart(document.getElementById("priceChart"), {
+    type: "line",
+    data: {
+      labels: prices.map(p => new Date(p.observed_at).toLocaleDateString()),
+      datasets: [{
+        label: "Price (USD)",
+        data: prices.map(p => p.final_cents / 100),
+        borderColor: "#66c0f4", backgroundColor: "rgba(102,192,244,.12)",
+        stepped: true, fill: true, pointRadius: 3,
+      }],
+    },
+    options: chartOpts("$"),
+  });
+
+  playerChart?.destroy();
+  playerChart = new Chart(document.getElementById("playerChart"), {
+    type: "line",
+    data: {
+      labels: players.map(p => new Date(p.observed_at).toLocaleString()),
+      datasets: [{
+        label: "Players",
+        data: players.map(p => p.player_count),
+        borderColor: "#a4d007", backgroundColor: "rgba(164,208,7,.12)",
+        fill: true, pointRadius: 0, tension: .25,
+      }],
+    },
+    options: chartOpts(""),
+  });
+}
+
+function chartOpts(prefix) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: "#7a8b99", maxTicksLimit: 8 }, grid: { color: "#2a333d" } },
+      y: {
+        ticks: { color: "#7a8b99", callback: v => prefix + v.toLocaleString() },
+        grid: { color: "#2a333d" }, beginAtZero: true,
+      },
+    },
+  };
+}
+
+let timer;
+document.getElementById("search").oninput = e => {
+  clearTimeout(timer);
+  timer = setTimeout(() => loadList(e.target.value), 200);
+};
+
+loadStats();
+loadList();
+</script>
+</body>
+</html>
