@@ -224,7 +224,11 @@ def main() -> None:
 
     run_pass()  # immediate first pass so you aren't waiting
     sched = BlockingScheduler()
-    sched.add_job(run_pass, "interval", minutes=30, max_instances=1)
+    # misfire_grace_time=None: if the laptop was asleep when a run was due,
+    # run it late instead of silently dropping it (the default grace window
+    # is 1 second, which a laptop sleep blows through every time).
+    sched.add_job(run_pass, "interval", minutes=30, max_instances=1,
+                  misfire_grace_time=None)
     print("\nScheduler running — Ctrl-C to stop.")
     sched.start()
 
