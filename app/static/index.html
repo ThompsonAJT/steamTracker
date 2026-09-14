@@ -95,8 +95,11 @@ async function loadList(q = "") {
   }
 }
 
+let activeApp = null;
+
 async function select(app) {
   activeId = app.appid;
+  activeApp = app;
   document.querySelectorAll(".row").forEach(r => r.classList.remove("active"));
   event?.currentTarget?.classList.add("active");
 
@@ -110,40 +113,47 @@ async function select(app) {
       <canvas id="playerChart"></canvas>
     </div>`;
 
-  const [prices, players] = await Promise.all([
-    fetch(`/api/apps/${app.appid}/prices`).then(r => r.json()),
-    fetch(`/api/apps/${app.appid}/players`).then(r => r.json()),
-  ]);
-
   priceChart?.destroy();
   priceChart = new Chart(document.getElementById("priceChart"), {
     type: "line",
-    data: {
-      labels: prices.map(p => new Date(p.observed_at).toLocaleDateString()),
-      datasets: [{
-        label: "Price (USD)",
-        data: prices.map(p => p.final_cents / 100),
-        borderColor: "#66c0f4", backgroundColor: "rgba(102,192,244,.12)",
-        stepped: true, fill: true, pointRadius: 3,
-      }],
-    },
+    data: { labels: [], datasets: [{
+      label: "Price (USD)", data: [],
+      borderColor: "#66c0f4", backgroundColor: "rgba(102,192,244,.12)",
+      stepped: true, fill: true, pointRadius: 3,
+    }] },
     options: chartOpts("$"),
   });
 
   playerChart?.destroy();
   playerChart = new Chart(document.getElementById("playerChart"), {
     type: "line",
-    data: {
-      labels: players.map(p => new Date(p.observed_at).toLocaleString()),
-      datasets: [{
-        label: "Players",
-        data: players.map(p => p.player_count),
-        borderColor: "#a4d007", backgroundColor: "rgba(164,208,7,.12)",
-        fill: true, pointRadius: 0, tension: .25,
-      }],
-    },
+    data: { labels: [], datasets: [{
+      label: "Players", data: [],
+      borderColor: "#a4d007", backgroundColor: "rgba(164,208,7,.12)",
+      fill: true, pointRadius: 0, tension: .25,
+    }] },
     options: chartOpts(""),
   });
+
+  await refreshDetail();
+}
+
+// Re-pulls price/player history for whichever app is open and updates the
+// existing charts in place, so periodic refresh doesn't rebuild the DOM.
+async function refreshDetail() {
+  if (!activeApp || !priceChart || !playerChart) return;
+  const [prices, players] = await Promise.all([
+    fetch(`/api/apps/${activeApp.appid}/prices`).then(r => r.json()),
+    fetch(`/api/apps/${activeApp.appid}/players`).then(r => r.json()),
+  ]);
+
+  priceChart.data.labels = prices.map(p => new Date(p.observed_at).toLocaleDateString());
+  priceChart.data.datasets[0].data = prices.map(p => p.final_cents / 100);
+  priceChart.update();
+
+  playerChart.data.labels = players.map(p => new Date(p.observed_at).toLocaleString());
+  playerChart.data.datasets[0].data = players.map(p => p.player_count);
+  playerChart.update();
 }
 
 function chartOpts(prefix) {
@@ -165,6 +175,15 @@ document.getElementById("search").oninput = e => {
   clearTimeout(timer);
   timer = setTimeout(() => loadList(e.target.value), 200);
 };
+
+// ingest.py polls every 30 min; refreshing every 60s is plenty to notice
+// new data without hammering the API for no reason.
+async function refreshAll() {
+  await loadStats();
+  await loadList(document.getElementById("search").value);
+  await refreshDetail();
+}
+setInterval(refreshAll, 60_000);
 
 loadStats();
 loadList();
