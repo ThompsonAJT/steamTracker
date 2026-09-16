@@ -100,6 +100,33 @@ def upsert_app(conn, appid: int, data: dict) -> None:
     )
 
 
+def upsert_tags(conn, appid: int, genres: list[dict]) -> None:
+    if not genres:
+        return
+    # Re-derive from scratch each pass rather than diffing — cheap for a
+    # handful of rows per app, and correct if Steam's genre list changes.
+    conn.execute(text("DELETE FROM app_tags WHERE appid = :appid"), {"appid": appid})
+    for genre in genres:
+        name = genre.get("description")
+        if not name:
+            continue
+        tag_id = conn.execute(
+            text("""
+                INSERT INTO tags (name) VALUES (:name)
+                ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+                RETURNING tag_id
+            """),
+            {"name": name},
+        ).scalar_one()
+        conn.execute(
+            text("""
+                INSERT INTO app_tags (appid, tag_id) VALUES (:appid, :tag_id)
+                ON CONFLICT DO NOTHING
+            """),
+            {"appid": appid, "tag_id": tag_id},
+        )
+
+
 def record_price(conn, appid: int, price: dict | None) -> bool:
     """Insert a price_event ONLY if it differs from the latest one.
 
@@ -185,6 +212,7 @@ def run_pass() -> None:
                     log_call(conn, appid, "appdetails", status, latency, False)
                 else:
                     upsert_app(conn, appid, data)
+                    upsert_tags(conn, appid, data.get("genres", []))
                     changed = record_price(conn, appid, data.get("price_overview"))
                     log_call(conn, appid, "appdetails", status, latency, changed)
                     apps_seen += 1
