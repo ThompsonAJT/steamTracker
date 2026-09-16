@@ -1,74 +1,79 @@
-# Steam Tracker — setup
+# Steam Tracker
+
+A SteamDB-style tracker for price history, concurrent player counts, and
+current deals across a set of popular Steam games.
+
+**Live:** https://steamtracker-production.up.railway.app
+
+## Stack
+
+Python 3 · httpx · PostgreSQL + TimescaleDB · SQLAlchemy Core · APScheduler ·
+FastAPI · vanilla JS + Chart.js. No React, no frontend build step.
+
+Deployed on Railway as three services: `steamTracker` (the FastAPI dashboard),
+`worker` (the continuous ingest loop), and `steamtracker-db` (TimescaleDB),
+talking to each other over Railway's private network.
 
 ## Folder layout
 
 ```
 steamtracker/
-├── docker-compose.yml
-├── .env                  ← you create this (see below), never commit it
-├── db/
-│   └── init/
-│       └── 001_schema.sql
-└── fetch_one.py
+├── bootstrap.sh               # local dev setup, run once
+├── docker-compose.yml         # local TimescaleDB on host port 5433
+├── requirements.txt
+├── Procfile                   # start commands Railway reads (web / worker)
+├── ingest.py                  # fetch loop + change detection
+├── db/init/001_schema.sql     # schema, runs once on first container start
+└── app/
+    ├── main.py                # FastAPI
+    └── static/index.html      # dashboard
 ```
 
-## 1. Create `.env`
-
-```
-POSTGRES_USER=steam
-POSTGRES_PASSWORD=pick_something_real
-POSTGRES_DB=steamtracker
-```
-
-Add `.env` to `.gitignore` immediately.
-
-## 2. Start the database
+## Local development
 
 ```bash
-docker compose up -d
-docker compose logs -f db      # Ctrl-C once you see "database system is ready"
+chmod +x bootstrap.sh
+./bootstrap.sh                 # creates .env, venv, starts local Postgres
+source .venv/bin/activate
+python ingest.py               # one pass over the seed list
+uvicorn app.main:app --reload
+open http://localhost:8000
 ```
 
-Connect with TablePlus or DBeaver:
+## Design decisions worth knowing about
 
-- host `localhost`, port **5433**, database `steamtracker`, user/password from `.env`
+- **`price_events` is an event log, not daily snapshots.** A row is only
+  inserted when the price actually changes. Snapshotting 100k apps daily
+  would be ~36M rows/year of mostly duplicates; the event log for the same
+  period is closer to 1-2M rows.
+- **`player_counts` is a genuine time series** — every poll is a new value —
+  so it's a TimescaleDB hypertable with a 30-day compression policy.
+- **Money is stored in integer cents**, never floats.
+- **`poll_log` records every API call** (latency, status, whether it produced
+  a change), which is what makes rate-limit and failure-rate numbers
+  possible to report honestly rather than guessed at.
 
-Verify the schema loaded:
+## Gotchas
 
-```sql
-SELECT tablename FROM pg_tables WHERE schemaname = 'public';
-```
+- Steam's store API tolerates roughly 200 requests / 5 min per IP.
+  `ingest.py` sleeps 2s between apps — don't remove that.
+- `appdetails` takes one appid per call despite the plural parameter name.
+- `price_overview` is absent for free and unreleased games — always `.get()`.
+- `db/init/`'s schema only runs on an empty Postgres volume. Editing the SQL
+  after first startup does nothing locally; on Railway it needs to be applied
+  manually against the running database.
+- A scheduler running on a laptop needs `misfire_grace_time=None` — the
+  default silently drops any run whose fire time passed while the machine
+  was asleep, instead of running it late.
 
-You should see: apps, price_events, player_counts, tags, app_tags, poll_log.
+## Deploying (Railway)
 
-## 3. Fetch one app
+Each service deploys independently via the Railway CLI:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install httpx
-python fetch_one.py 730
+railway up -s steamTracker
+railway up -s worker
 ```
 
-## Gotchas that will bite you
-
-- **The init script only runs on an empty volume.** If you edit `001_schema.sql`
-  after the first startup, nothing happens. To reset during early development:
-  `docker compose down -v` (the `-v` wipes the volume), then `up -d` again.
-  Once you have real data, stop doing this and switch to Alembic migrations.
-- **`price_overview` is missing for free games.** Always use `.get()`.
-- **The store API is undocumented and unversioned.** It rate-limits at roughly
-  200 requests per 5 minutes per IP. Do not hammer it while testing — put a
-  sleep between calls from the very first loop you write.
-- **`appdetails` only accepts one appid at a time** in practice, despite the
-  plural parameter name. Plan your request budget around that.
-
-## Next steps, in order
-
-1. Read `sample_730.json` end to end. Decide which fields you actually want.
-2. Show the schema to your advisor before writing ingestion code.
-3. Write `ingest.py`: loop over 10 hardcoded appids, insert into `apps` +
-   `price_events`, and log every call into `poll_log`.
-4. Add a "only insert a price_event if it differs from the latest one" check.
-   That's your change-detection logic — the core of the whole project.
-5. Wrap it in APScheduler.
+GitHub auto-deploy is configured, so a push to `main` should also trigger
+both services to redeploy on its own.
