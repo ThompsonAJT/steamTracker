@@ -23,13 +23,26 @@
   h1 { margin: 0; font-size: 20px; font-weight: 600; }
   .stats { color: var(--dim); font-size: 13px; }
   .wrap { display: grid; grid-template-columns: 340px 1fr; gap: 0; min-height: calc(100vh - 70px); }
-  @media (max-width: 800px) { .wrap { grid-template-columns: 1fr; } }
   aside { border-right: 1px solid var(--line); padding: 16px; }
   main { padding: 24px; min-width: 0; }
-  input[type=search] {
+  input[type=search], select#tagFilter {
     width: 100%; padding: 9px 12px; border-radius: 4px;
     border: 1px solid var(--line); background: var(--panel-2);
-    color: var(--text); font-size: 14px; margin-bottom: 12px;
+    color: var(--text); font-size: 14px; margin-bottom: 10px;
+  }
+  .back-btn { display: none; }
+  @media (max-width: 800px) {
+    .wrap { grid-template-columns: 1fr; }
+    main { display: none; }
+    main.open {
+      display: block; position: fixed; inset: 0; z-index: 20;
+      background: var(--bg); overflow-y: auto; padding: 16px 16px 32px;
+    }
+    .back-btn {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: none; border: none; color: var(--accent);
+      font-size: 15px; padding: 8px 0 16px; cursor: pointer;
+    }
   }
   .row {
     padding: 9px 10px; border-radius: 4px; cursor: pointer;
@@ -59,10 +72,14 @@
 <div class="wrap">
   <aside>
     <input type="search" id="search" placeholder="Search games…" autocomplete="off">
+    <select id="tagFilter">
+      <option value="">All genres</option>
+    </select>
     <div id="list"></div>
   </aside>
 
-  <main>
+  <main id="main">
+    <button class="back-btn" onclick="closeDetail()">‹ Back to list</button>
     <div id="detail" class="empty">Select a game from the list.</div>
   </main>
 </div>
@@ -78,8 +95,22 @@ async function loadStats() {
     `${s.player_samples} player samples · ${s.error_rate}% errors`;
 }
 
-async function loadList(q = "") {
-  const apps = await (await fetch(`/api/apps?q=${encodeURIComponent(q)}`)).json();
+async function loadTags() {
+  const tags = await (await fetch("/api/tags")).json();
+  const sel = document.getElementById("tagFilter");
+  for (const t of tags) {
+    const opt = document.createElement("option");
+    opt.value = t.name;
+    opt.textContent = `${t.name} (${t.app_count})`;
+    sel.appendChild(opt);
+  }
+}
+
+function currentQ() { return document.getElementById("search").value; }
+function currentTag() { return document.getElementById("tagFilter").value; }
+
+async function loadList(q = currentQ(), tag = currentTag()) {
+  const apps = await (await fetch(`/api/apps?q=${encodeURIComponent(q)}&tag=${encodeURIComponent(tag)}`)).json();
   const list = document.getElementById("list");
   list.innerHTML = "";
   for (const a of apps) {
@@ -97,11 +128,16 @@ async function loadList(q = "") {
 
 let activeApp = null;
 
+function closeDetail() {
+  document.getElementById("main").classList.remove("open");
+}
+
 async function select(app) {
   activeId = app.appid;
   activeApp = app;
   document.querySelectorAll(".row").forEach(r => r.classList.remove("active"));
   event?.currentTarget?.classList.add("active");
+  document.getElementById("main").classList.add("open");
 
   document.getElementById("detail").innerHTML = `
     <div class="card">
@@ -173,19 +209,21 @@ function chartOpts(prefix) {
 let timer;
 document.getElementById("search").oninput = e => {
   clearTimeout(timer);
-  timer = setTimeout(() => loadList(e.target.value), 200);
+  timer = setTimeout(() => loadList(), 200);
 };
+document.getElementById("tagFilter").onchange = () => loadList();
 
 // ingest.py polls every 30 min; refreshing every 60s is plenty to notice
 // new data without hammering the API for no reason.
 async function refreshAll() {
   await loadStats();
-  await loadList(document.getElementById("search").value);
+  await loadList();
   await refreshDetail();
 }
 setInterval(refreshAll, 60_000);
 
 loadStats();
+loadTags();
 loadList();
 </script>
 </body>

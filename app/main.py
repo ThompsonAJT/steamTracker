@@ -29,7 +29,7 @@ def index():
 
 
 @app.get("/api/apps")
-def list_apps(q: str = "", limit: int = 50):
+def list_apps(q: str = "", tag: str = "", limit: int = 50):
     """Search apps, with their most recent price attached."""
     with ENGINE.connect() as conn:
         rows = conn.execute(
@@ -45,10 +45,30 @@ def list_apps(q: str = "", limit: int = 50):
                     LIMIT 1
                 ) p ON TRUE
                 WHERE (:q = '' OR LOWER(a.name) LIKE '%' || LOWER(:q) || '%')
+                  AND (:tag = '' OR EXISTS (
+                      SELECT 1 FROM app_tags at
+                      JOIN tags t ON t.tag_id = at.tag_id
+                      WHERE at.appid = a.appid AND t.name = :tag
+                  ))
                 ORDER BY a.name
                 LIMIT :limit
             """),
-            {"q": q, "limit": limit},
+            {"q": q, "tag": tag, "limit": limit},
+        ).mappings().all()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/tags")
+def list_tags():
+    with ENGINE.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT t.name, COUNT(*) AS app_count
+                FROM tags t
+                JOIN app_tags at ON at.tag_id = t.tag_id
+                GROUP BY t.name
+                ORDER BY t.name
+            """)
         ).mappings().all()
     return [dict(r) for r in rows]
 
